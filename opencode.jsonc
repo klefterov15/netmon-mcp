@@ -3,7 +3,7 @@
   "mcp": {
     "mcp-test": {
       "type": "local",
-      "command": ["./mcp-test"],
+      "command": ["sudo", "./mcp-test"],
       "enabled": true,
     },
   },
