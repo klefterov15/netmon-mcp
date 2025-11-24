@@ -2,26 +2,21 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"log"
+	"net"
 	"os"
 
-	//"encoding/json"
 	"fmt"
 
-	"github.com/cilium/ebpf/rlimit"
-	//"time"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"mcp-test/ebpf"
+	"mcp-test/netmon"
 )
 
-//go:generate go tool bpf2go -tags linux -go-package ebpf -output-dir ebpf/ netmon ebpf/netmonitor.c
+//go:generate go tool bpf2go -tags linux -go-package netmon -output-dir netmon/ netmon netmon/netmon.c -- -I./netmon/include
 func main() {
-	//Raise an error if MEMLOCK rlimit fails to raise
-	if err := rlimit.RemoveMemlock(); err != nil {
-		log.Printf("warning: could not remove mem lock: %s", err)
-	}
 	// Create MCP Server instance
 	s := server.NewMCPServer("network-mcp_server",
 		"0.1.0",
@@ -39,7 +34,11 @@ func main() {
 		mcp.WithString("network_operation",
 			mcp.Required(),
 			mcp.Enum("incoming", "outgoing"),
-			mcp.Description("Network traffic to monitor."),
+			mcp.Description(
+				`The incoming operation measures the number of packets 
+				received per second (in the timespan of 5 seconds). 
+				The outgoing operation checks for any new TCP connections.`
+			),
 		),
 	)
 
@@ -79,15 +78,35 @@ func handleNetworkTraffic(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 
 	switch operation {
 	case "incoming":
-		result, err = ebpf.IncomingPacketsPerSecond()
+		result, err = netmon.IncomingPacketsPerSecond()
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		// Return result
+
 		return mcp.NewToolResultText(fmt.Sprintf("%.2f", result)), nil
 	case "outgoing":
-		return mcp.NewToolResultError(fmt.Sprintf("unknown operation: %s", operation)), nil
+		event, err := netmon.MonitorTcpConnections()
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		result := fmt.Sprintf("%-16s %-15s %-6d -> %-15s %-6d",
+			event.Comm,
+			intToIP(event.Saddr),
+			event.Sport,
+			intToIP(event.Daddr),
+			event.Dport,
+		)
+
+		return mcp.NewToolResultText(result), nil
 	default:
 		return mcp.NewToolResultError(fmt.Sprintf("unknown operation: %s", operation)), nil
 	}
+}
+
+// intToIP converts IPv4 number to net.IP
+func intToIP(ipNum uint32) net.IP {
+	ip := make(net.IP, 4)
+	binary.BigEndian.PutUint32(ip, ipNum)
+	return ip
 }
