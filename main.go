@@ -8,6 +8,7 @@ import (
 	//"encoding/json"
 	"fmt"
 
+	"github.com/cilium/ebpf/rlimit"
 	//"time"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -17,8 +18,12 @@ import (
 
 //go:generate go tool bpf2go -tags linux -go-package ebpf -output-dir ebpf/ netmon ebpf/netmonitor.c
 func main() {
+	//Raise an error if MEMLOCK rlimit fails to raise
+	if err := rlimit.RemoveMemlock(); err != nil {
+		log.Printf("warning: could not remove mem lock: %s", err)
+	}
 	// Create MCP Server instance
-	s := server.NewMCPServer("HTTP-test-mcp_server",
+	s := server.NewMCPServer("network-mcp_server",
 		"0.1.0",
 		server.WithToolCapabilities(true),
 		server.WithRecovery(),
@@ -45,7 +50,6 @@ func main() {
 	case "http":
 		httpServer := server.NewStreamableHTTPServer(s,
 			server.WithEndpointPath("/mcp"))
-
 		log.Println("Listening on port:")
 		if err := httpServer.Start(":" + port); err != nil {
 			log.Fatal(err)
@@ -75,13 +79,15 @@ func handleNetworkTraffic(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 
 	switch operation {
 	case "incoming":
-		result = ebpf.IncomingPacketsPerSecond()
+		result, err = ebpf.IncomingPacketsPerSecond()
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		// Return result
+		return mcp.NewToolResultText(fmt.Sprintf("%.2f", result)), nil
 	case "outgoing":
 		return mcp.NewToolResultError(fmt.Sprintf("unknown operation: %s", operation)), nil
 	default:
 		return mcp.NewToolResultError(fmt.Sprintf("unknown operation: %s", operation)), nil
 	}
-
-	// Return result
-	return mcp.NewToolResultText(fmt.Sprintf("%.2f", result)), nil
 }
